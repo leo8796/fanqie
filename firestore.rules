@@ -1,8 +1,8 @@
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
-    // 每个人只能读写自己的那一份数据
-    match /users/{userId} {
+    // 每个人只能读写自己的数据：users/{你的 uid} 以及它下面的任务、日程、笔记
+    match /users/{userId}/{document=**} {
       allow read, write: if request.auth != null && request.auth.uid == userId;
     }
   }
