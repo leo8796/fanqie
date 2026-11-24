@@ -1205,6 +1205,8 @@ body.dragging{cursor:grabbing;user-select:none;-webkit-user-select:none}
   const timeOf = t => t.date && t.date.length>10 ? t.date.slice(11,16) : null;
   const daysOf = t => t.days && t.days.length>1 ? t.days : (t.date ? [t.date.slice(0,10)] : []);
   const onDay = (t, d) => daysOf(t).includes(d);
+  // a multi-day task is finished day by day: done on that day, or done as a whole
+  const doneOn = (t, d) => !!(t.completed || (d && t.doneDays && t.doneDays.includes(d)));
   const lastDay = t => { const a = daysOf(t); return a.length ? a[a.length-1] : null; };
   let rollShown = false;
   function rollOver(){
@@ -1215,7 +1217,7 @@ body.dragging{cursor:grabbing;user-select:none;-webkit-user-select:none}
       if(!t.rolledFrom) t.rolledFrom = daysOf(t)[0];
       t.rolls = (t.rolls||0) + 1;
       const tm = timeOf(t);
-      t.date = td + (tm ? "T"+tm : ""); t.days = [];
+      t.date = td + (tm ? "T"+tm : ""); t.days = []; t.doneDays = [];
       n++;
     });
     if(n && !rollShown){ rollShown = true; toast("已把 "+n+" 项没完成的任务延到今天"); }
@@ -1223,6 +1225,7 @@ body.dragging{cursor:grabbing;user-select:none;-webkit-user-select:none}
   }
   function setDays(t, days, time){
     t.rolledFrom = null; t.rolls = 0;
+    t.doneDays = days.length>1 ? (t.doneDays||[]).filter(d=>days.includes(d)) : [];
     const a = [...new Set(days.filter(Boolean))].sort();
     if(time===undefined) time = timeOf(t);
     if(!a.length){ t.date = null; t.days = []; return; }
@@ -1410,6 +1413,7 @@ body.dragging{cursor:grabbing;user-select:none;-webkit-user-select:none}
     let date = typeof raw==="string" && DATE_RE.test(raw) ? raw : null;
     let days = Array.isArray(t.days) ? [...new Set(t.days.filter(x=>typeof x==="string" && DAY.test(x)))].sort() : [];
     if(days.length<2) days = []; else date = days[0] + (date && date.length>10 ? date.slice(10) : "");
+    const doneDays = !completed && days.length && Array.isArray(t.doneDays) ? [...new Set(t.doneDays.filter(x=>days.includes(x)))].sort() : [];
     let doneAt = null;
     if(completed){
       if(typeof t.doneAt==="string" && DAY.test(t.doneAt)) doneAt = t.doneAt;
@@ -1422,7 +1426,7 @@ body.dragging{cursor:grabbing;user-select:none;-webkit-user-select:none}
       id:String(t.id||uid()), title:String(t.title ?? t.text ?? "").slice(0,300),
       completed, doneAt, pomLog, project: typeof t.project==="string" && t.project ? t.project : null,
       categories:[...new Set(cats)].sort((a,b)=>CATS.indexOf(a)-CATS.indexOf(b)),
-      date, days, rolledFrom: typeof t.rolledFrom==="string" && DAY.test(t.rolledFrom) ? t.rolledFrom : null,
+      date, days, doneDays, rolledFrom: typeof t.rolledFrom==="string" && DAY.test(t.rolledFrom) ? t.rolledFrom : null,
       notes, poms:Math.max(0, Math.round(+t.poms||0)), est:Math.max(0, Math.min(40, Math.round(+t.est||0))),
       repeat: normRepeat(t.repeat), spawned: typeof t.spawned==="string" ? t.spawned.slice(0,60) : "",
       rolls: Math.max(0, Math.min(99, Math.round(+t.rolls||0))), from: typeof t.from==="string" ? t.from.slice(0,60) : "",
@@ -1483,7 +1487,7 @@ body.dragging{cursor:grabbing;user-select:none;-webkit-user-select:none}
   }
   const maxOrder = () => state.tasks.reduce((m,t)=>Math.max(m,t.order),0);
   const byOrder = (a,b) => a.order-b.order;
-  const openThenDone = (arr, cmp) => [...arr.filter(t=>!t.completed).sort(cmp||byOrder), ...arr.filter(t=>t.completed).sort(byOrder)];
+  const openThenDone = (arr, cmp, day) => [...arr.filter(t=>!doneOn(t,day)).sort(cmp||byOrder), ...arr.filter(t=>doneOn(t,day)).sort(byOrder)];
 
   /* ---------- persistence: this browser + your account (Firebase) ---------- */
   const FBC = window.FANQIE_FIREBASE || {};
@@ -1880,11 +1884,23 @@ body.dragging{cursor:grabbing;user-select:none;-webkit-user-select:none}
     t.spawned = "";
   }
   function setDone(t, on){
-    t.completed = on; t.doneAt = on ? todayStr() : null;
+    t.completed = on; t.doneAt = on ? todayStr() : null; if(!on) t.doneDays = [];
     if(on && state.activeId===t.id) state.activeId = null;
     if(on) spawnNext(t); else unspawn(t);
   }
   function toggleDone(t){ setDone(t, !t.completed); save(); renderAll(); }
+  function toggleDay(t, day){
+    const days = daysOf(t);
+    if(days.length<2 || !day || !days.includes(day)) return toggleDone(t);
+    const dd = new Set(t.completed ? days : (t.doneDays||[]));
+    if(dd.has(day)) dd.delete(day); else dd.add(day);
+    const all = days.every(d=>dd.has(d));
+    if(all && !t.completed) setDone(t, true); else if(!all && t.completed) setDone(t, false);
+    t.doneDays = all ? [] : [...dd].sort();
+    if(!all && dd.has(day) && state.activeId===t.id) state.activeId = null;
+    save(); renderAll();
+    if(!all && dd.has(day)) toast("完成了第 "+(days.indexOf(day)+1)+"/"+days.length+" 天，整个任务还剩 "+(days.length-dd.size)+" 天");
+  }
   function deleteTask(id){
     const i = state.tasks.findIndex(t=>t.id===id); if(i<0) return;
     const t = state.tasks[i], wasActive = state.activeId===id;
@@ -1934,8 +1950,8 @@ body.dragging{cursor:grabbing;user-select:none;-webkit-user-select:none}
   function renderTabs(){
     const td = todayStr(), tm = addDays(td,1);
     const counts = {
-      today: state.tasks.filter(t=>!t.completed && t.date && (onDay(t,td) || lastDay(t)<td)).length,
-      tomorrow: state.tasks.filter(t=>!t.completed && onDay(t,tm)).length,
+      today: state.tasks.filter(t=>!doneOn(t,td) && t.date && (onDay(t,td) || lastDay(t)<td)).length,
+      tomorrow: state.tasks.filter(t=>!doneOn(t,tm) && onDay(t,tm)).length,
       inbox: state.tasks.filter(t=>!t.completed && !t.date).length
     };
     $$(".tabs [data-view]").forEach(b=>{
@@ -2209,7 +2225,7 @@ body.dragging{cursor:grabbing;user-select:none;-webkit-user-select:none}
   }
 
   function row(t, ctx){
-    const td = todayStr(), d = dayOf(t), tm = timeOf(t), open = !t.completed;
+    const td = todayStr(), d = dayOf(t), tm = timeOf(t), isDone = doneOn(t, ctx.day), open = !isDone;
     const isActive = t.id===state.activeId && open;
     const title = h("textarea", {class:"title", rows:"1", maxlength:"300", "aria-label":"任务名称，回车打开详情", spellcheck:"false", readonly:true});
     title.value = t.title;
@@ -2234,19 +2250,19 @@ body.dragging{cursor:grabbing;user-select:none;-webkit-user-select:none}
     if(showNotes){ notes = h("textarea", {class:"notes", rows:"1", maxlength:"5000", placeholder:"备注", "aria-label":"备注"}); notes.value = t.notes; }
     const c0 = t.categories[0];
     const showPfx = pj && !ctx.inProject;
-    return h("li", {class:"row"+(t.completed?" done":"")+(isActive?" active":"")+(t.id===editId?" sel":""), dataset:{id:t.id}, style: c0 ? "--rc:"+catColor(c0)+";--pc:"+catColor(c0) : null},
+    return h("li", {class:"row"+(isDone?" done":"")+(isActive?" active":"")+(t.id===editId?" sel":""), dataset:{id:t.id}, style: c0 ? "--rc:"+catColor(c0)+";--pc:"+catColor(c0) : null},
       h("span", {class:"grip", html:IC.grip, "aria-hidden":"true"}),
-      h("button", {class:"chk", dataset:{act:"toggle"}, html:IC.check, "aria-label": t.completed ? "标记为未完成" : "标记为完成"}),
+      h("button", {class:"chk", dataset:{act:"toggle"}, html:IC.check, "aria-label": isDone ? "标记为未完成" : "标记为完成"}),
       h("div", {class:"rmain"}, h("div", {class:"tline"+(sfx ? " hasSfx" : "")}, showPfx ? h("button", {class:"pfx", dataset:{act:"proj"}, title:"项目：点击修改"}, pj.name) : null, title, sfx), meta, notes),
       h("div", {class:"racts"}, edits,
-        canFocus(t) ? h("button", {class:"play"+(isActive?" on":""), dataset:{act:"focus"}, html:IC.play, title:"专注这项任务", "aria-label":"专注这项任务"}) : null,
+        canFocus(t) && !isDone ? h("button", {class:"play"+(isActive?" on":""), dataset:{act:"focus"}, html:IC.play, title:"专注这项任务", "aria-label":"专注这项任务"}) : null,
         h("button", {dataset:{act:"del"}, html:IC.del, title:"删除", "aria-label":"删除任务"})));
   }
   function rowList(tasks, ctx){
     const ul = h("ul", {class:"rows", dataset:{date:ctx.day||""}});
     let sep = false;
     for(const t of tasks){
-      if(t.completed && !sep && ctx.sep){ sep = true; ul.append(h("li", {class:"sep"}, "已完成 "+tasks.filter(x=>x.completed).length)); }
+      if(doneOn(t, ctx.day) && !sep && ctx.sep){ sep = true; ul.append(h("li", {class:"sep"}, "已完成 "+tasks.filter(x=>doneOn(x, ctx.day)).length)); }
       ul.append(row(t, ctx));
     }
     return ul;
@@ -2346,8 +2362,8 @@ body.dragging{cursor:grabbing;user-select:none;-webkit-user-select:none}
   function viewDay(m, v){
     const td = todayStr(), day = v==="today" ? td : addDays(td,1);
     const tasks = state.tasks.filter(t=>onDay(t,day) || (v==="today" && t.date && lastDay(t)<td && !t.completed));
-    const list = openThenDone(tasks, (a,b)=> (dayOf(a)<dayOf(b)?-1:dayOf(a)>dayOf(b)?1:0) || byOrder(a,b));
-    const open = list.filter(t=>!t.completed), done = list.length-open.length;
+    const list = openThenDone(tasks, (a,b)=> (dayOf(a)<dayOf(b)?-1:dayOf(a)>dayOf(b)?1:0) || byOrder(a,b), day);
+    const open = list.filter(t=>!doneOn(t,day)), done = list.length-open.length;
     const late = open.filter(t=>lastDay(t)<td).length;
     const pr = pomSum([day]), p = pr.p;
     let sum = open.length ? open.length+" 项待办" : (list.length ? "全部完成" : "");
@@ -2406,7 +2422,7 @@ body.dragging{cursor:grabbing;user-select:none;-webkit-user-select:none}
   const taskDur = t => t.est ? Math.min(240, t.est*state.settings.focus) : 30;
   function timeline(day, list){
     const px = TL.px, evs = evsOn(day), timedEv = evs.filter(e=>e.time), allday = evs.filter(e=>!e.time);
-    const timedT = list.filter(t=>timeOf(t)), tray = list.filter(t=>!t.completed && !timeOf(t));
+    const timedT = list.filter(t=>timeOf(t)), tray = list.filter(t=>!doneOn(t,day) && !timeOf(t));
     const items = [
       ...timedEv.map(e=>({ev:e, s:toMin(e.time), d:evDur(e)})),
       ...timedT.map(t=>({t, s:toMin(timeOf(t)), d:taskDur(t)}))
@@ -2428,7 +2444,7 @@ body.dragging{cursor:grabbing;user-select:none;-webkit-user-select:none}
           h("b", {text:e.time}), h("span", {class:"ek", text:e.kind}), h("span", {class:"tn", text:(pj ? pj.name+" " : "")+e.title})));
       } else {
         const t = it.t, pj = getProj(t.project);
-        grid.append(h("div", {class:"tl-item task"+(t.completed ? " done" : ""), dataset:{id:t.id, drag:"1"}, style:pos+"--k:"+catColor(t.categories[0]||""), title:"拖动换时间；拖回左边取消时间"},
+        grid.append(h("div", {class:"tl-item task"+(doneOn(t,day) ? " done" : ""), dataset:{id:t.id, drag:"1"}, style:pos+"--k:"+catColor(t.categories[0]||""), title:"拖动换时间；拖回左边取消时间"},
           h("b", {text:timeOf(t)}), h("span", {class:"tn", text:(pj ? pj.name+" " : "")+t.title}), t.est ? h("small", {text:t.est+" 个番茄"}) : null));
       }
     });
@@ -2618,8 +2634,8 @@ body.dragging{cursor:grabbing;user-select:none;-webkit-user-select:none}
     const grid = h("div", {class:"plan"});
     for(let i=0;i<7;i++){
       const day = addDays(ws,i);
-      const tasks = openThenDone(state.tasks.filter(t=>onDay(t,day)));
-      const open = tasks.filter(t=>!t.completed).length, dpr = pomSum([day]), p = dpr.p;
+      const tasks = openThenDone(state.tasks.filter(t=>onDay(t,day)), null, day);
+      const open = tasks.filter(t=>!doneOn(t,day)).length, dpr = pomSum([day]), p = dpr.p;
       const load = h("span", {class:"load"},
         tasks.length ? h("span", null, h("b",{text:open}), " 项待办"+(tasks.length-open ? "，完成 "+(tasks.length-open) : "")) : h("span", null, "空"),
         p ? h("span", {class:"pom", title:"这天专注了 "+p+" 个番茄"+pomBreak(dpr)}, h("i",{class:"tom"}), p) : null);
@@ -2644,8 +2660,9 @@ body.dragging{cursor:grabbing;user-select:none;-webkit-user-select:none}
     const evDays = daysOf(t), evK = day ? evDays.indexOf(day) : -1;
     const td = todayStr(), tm = timeOf(t);
     const color = t.categories.length ? catColor(t.categories[0]) : "var(--c5)";
-    return h("div", {class:"ev"+(t.completed?" done":"")+(!t.completed && lastDay(t)<td ? " late" : ""), dataset:{id:t.id, act:"open"}, style:"--lc:"+color,
-      title:(getProj(t.project) ? getProj(t.project).name+" " : "")+t.title+(t.categories.length ? "（"+t.categories.join("、")+"）" : "")+(t.completed ? "，已完成" : "")},
+    const dn = doneOn(t, day);
+    return h("div", {class:"ev"+(dn?" done":"")+(!t.completed && lastDay(t)<td ? " late" : ""), dataset:{id:t.id, act:"open"}, style:"--lc:"+color,
+      title:(getProj(t.project) ? getProj(t.project).name+" " : "")+t.title+(t.categories.length ? "（"+t.categories.join("、")+"）" : "")+(dn ? "，已完成" : "")},
       tm ? h("span",{class:"tm", text:tm}) : null, getProj(t.project) ? h("span",{class:"evp", text:getProj(t.project).name}) : null, t.title, evDays.length>1 && evK>=0 ? h("span",{class:"evk", text:(evK+1)+"/"+evDays.length}) : null);
   }
   function evPill(e){
@@ -2666,7 +2683,7 @@ body.dragging{cursor:grabbing;user-select:none;-webkit-user-select:none}
     m.append(header("周日历", md(ws)+" – "+md(we), n ? "这周共 "+n+" 项任务，点空白处添加，拖动可以换日期" : "点某一天的空白处就能添加任务", navBtns("周")));
     const grid = h("div", {class:"calgrid week"}), boxes = [];
     for(let i=0;i<7;i++){
-      const day = addDays(ws,i), tasks = openThenDone(state.tasks.filter(t=>onDay(t,day)), calSort);
+      const day = addDays(ws,i), tasks = openThenDone(state.tasks.filter(t=>onDay(t,day)), calSort, day);
       const box = h("div", {class:"evs", dataset:{date:day}}, evsOn(day).map(evPill), tasks.map(t=>ev(t, day)));
       boxes.push(box);
       grid.append(h("div", {class:"cday"+(day===td?" istoday":""), dataset:{date:day}},
@@ -2690,19 +2707,19 @@ body.dragging{cursor:grabbing;user-select:none;-webkit-user-select:none}
     const grid = h("div", {class:"calgrid month"}), boxes = [];
     "日一二三四五六".split("").forEach(w=>grid.append(h("div", {class:"wkh", text:w})));
     for(let i=0;i<count;i++){
-      const day = addDays(start,i), d = parseD(day), tasks = openThenDone(state.tasks.filter(t=>onDay(t,day)), calSort);
+      const day = addDays(start,i), d = parseD(day), tasks = openThenDone(state.tasks.filter(t=>onDay(t,day)), calSort, day);
       const allEv = evsOn(day), dev = allEv.filter(e=>e.kind!=="课程"), cls = allEv.length - dev.length, room = Math.max(0, 3-dev.length);
       const box = h("div", {class:"evs", dataset:{date:day}}, dev.map(evPill), tasks.slice(0,room).map(t=>ev(t, day)));
       if(tasks.length>room) box.append(h("button", {class:"more", dataset:{act:"pick", date:day}}, h("span",{class:"mt", text:"还有 "}), tasks.length-room, h("span",{class:"mt", text:" 项"})));
       boxes.push(box);
-      const open = tasks.filter(t=>!t.completed).length;
+      const open = tasks.filter(t=>!doneOn(t,day)).length;
       grid.append(h("div", {class:"cday"+(d.getMonth()!==mon?" out":"")+(day===td?" istoday":"")+(day===monthSel?" sel":""), dataset:{date:day}, role:"button", tabindex:"0", "aria-label":dayLabel(day)+"，"+tasks.length+" 项任务"},
         h("div", {class:"chead"}, h("span", {class:"dnum", text:d.getDate()}), pomBadge(day), open ? h("span", {class:"cnt", text:open+" 项"}) : null), box));
     }
     m.append(grid);
     calSortables(boxes, "mo");
     // selected day
-    const tasks = openThenDone(state.tasks.filter(t=>onDay(t,monthSel)));
+    const tasks = openThenDone(state.tasks.filter(t=>onDay(t,monthSel)), null, monthSel);
     const panel = h("div", {class:"daypanel"}, h("h3", null, dayLabel(monthSel), monthSel===td ? h("small",{text:"今天"}) : null));
     panel.append(quickAdd("day:"+monthSel, {date:monthSel}, "添加到 "+dayLabel(monthSel)+"，回车保存"));
     const pev = evsOn(monthSel);
@@ -2720,7 +2737,7 @@ body.dragging{cursor:grabbing;user-select:none;-webkit-user-select:none}
     const pills = [];
     const strip = h("div", {class:"strip"}, h("span", {class:"strip-l", text:"拖到："}));
     for(let i=0;i<7;i++){
-      const day = addDays(ws,i), n = state.tasks.filter(t=>!t.completed && onDay(t,day)).length;
+      const day = addDays(ws,i), n = state.tasks.filter(t=>!doneOn(t,day) && onDay(t,day)).length;
       const p = h("div", {class:"pill"+(day===td?" istoday":""), dataset:{date:day}, title:"拖到这里安排到"+dayLabel(day)}, h("b",{text:wk(day)}), md(day)+(n ? "，"+n+" 项" : ""));
       pills.push(p); strip.append(p);
     }
@@ -3028,7 +3045,7 @@ body.dragging{cursor:grabbing;user-select:none;-webkit-user-select:none}
     const a = e.target.closest("[data-act]");
     if(a){
       const id = a.closest("[data-id]")?.dataset.id, t = id && getTask(id), act = a.dataset.act;
-      if(act==="toggle" && t) toggleDone(t);
+      if(act==="toggle" && t) toggleDay(t, a.closest(".rows")?.dataset.date || "");
       else if(act==="del" && t) deleteTask(id);
       else if(act==="focus" && t) focusTask(id);
       else if(act==="cat" && t) openPop("cat", id, a);
