@@ -1571,8 +1571,9 @@ body.dragging{cursor:grabbing;user-select:none;-webkit-user-select:none}
         dirty = true;
       }
       attachListeners();
+      if(cloudPending){ cloudPending = false; settleTimer(); }
       if(dirty){ dirty = false; await pushRemote(); }
-    }catch(e){ setSync("暂时连不上服务器，改动先存在这台设备上"); setTimeout(loadCloud, 20000); }
+    }catch(e){ setSync("暂时连不上服务器，改动先存在这台设备上"); if(cloudPending){ cloudPending = false; settleTimer(); } setTimeout(loadCloud, 20000); }
   }
   function detachListeners(){ unsubs.forEach(u=>{ try{ u(); }catch(e){} }); unsubs = []; }
   function attachListeners(){
@@ -1634,15 +1635,17 @@ body.dragging{cursor:grabbing;user-select:none;-webkit-user-select:none}
   }
   document.addEventListener("focusout", ()=>{ if(pendingRender) setTimeout(()=>{ const a = document.activeElement; if(!(a && a.matches && a.matches("input,textarea,select"))) remoteRender(); }, 80); });
   const pullRemote = () => { if(mode==="cloud" && !synced) loadCloud(); };
+  let cloudPending = false;
+  function settleTimer(){ if(T.running && !T.up && T.endAt <= Date.now()){ T.remaining = 0; complete(true, true); } }
   function enterApp(){
-    if(T.running && !T.up && T.endAt <= Date.now()){ T.remaining = 0; complete(true, true); }
+    if(!cloudPending) settleTimer();
     rollOver();
     document.body.classList.remove("locked");
     $("#auth").hidden = true;
     renderAcct(); syncSettingsInputs(); renderAll();
   }
   function startCloud(user, migrate){
-    userId = user.uid; mode = "cloud";
+    userId = user.uid; mode = "cloud"; cloudPending = true;
     try{ localStorage.removeItem(LS_GUEST); }catch(e){}
     state = loadLocal() || fresh();
     if(migrate){
@@ -1661,7 +1664,7 @@ body.dragging{cursor:grabbing;user-select:none;-webkit-user-select:none}
   }
   function showAuth(){
     detachListeners(); synced = null;
-    mode = null; userId = null; state = fresh(); syncText = "";
+    mode = null; userId = null; cloudPending = false; state = fresh(); syncText = "";
     closePop(); closeEditor(); curProj = null;
     document.body.classList.add("locked");
     setAuthMode("login"); $("#authPass").value = ""; $("#authPass2").value = "";
@@ -3620,6 +3623,7 @@ body.dragging{cursor:grabbing;user-select:none;-webkit-user-select:none}
 
   let tickDay = todayStr();
   function tick(){
+    if(!mode || cloudPending) return; // 账号数据加载完之前不结算计时，否则记录会被云端数据覆盖
     if(todayStr()!==tickDay){ tickDay = todayStr(); monthSel = tickDay; rollShown = false; if(!demo && rollOver()) save(); renderAll(); }
     if(Date.now() - lastRemind > 30000){ lastRemind = Date.now(); checkReminders(); }
     if(!T.running) return;
