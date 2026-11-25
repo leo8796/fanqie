@@ -210,6 +210,8 @@ li.sep{list-style:none;font-size:12px;color:var(--muted);padding:10px 8px 2px 44
 .pill.istoday{border-color:var(--tomato)}
 .pill .row{display:none}
 .pill.over{border-style:solid;border-color:var(--ink);background:var(--hover)}
+.daydrop{margin:0 0 10px}
+.daydrop .pill{max-width:96px;min-width:60px;transition:border-color .12s,background .12s}
 .strip .vnav{margin-left:0}
 
 /* ---------- projects ---------- */
@@ -1927,7 +1929,7 @@ body.dragging{cursor:grabbing;user-select:none;-webkit-user-select:none}
   function moveToDay(id, day, container, fromDay){
     const t = getTask(id); if(!t) return;
     const prev = t.date, prevDays = (t.days||[]).slice(), a = daysOf(t);
-    if(fromDay && a.length>1) setDays(t, a.filter(x=>x!==fromDay).concat(day ? [day] : []));
+    if(fromDay && a.length>1) setDays(t, [...new Set(a.filter(x=>x!==fromDay).concat(day ? [day] : []))].sort());
     else setDays(t, day ? [day] : []);
     if(container) reorder(container);
     save(); setTimeout(renderAll, 0);
@@ -2359,6 +2361,14 @@ body.dragging{cursor:grabbing;user-select:none;-webkit-user-select:none}
       h("div", {class:"wrap-f"}, h("button", {dataset:{act:"reviewclose"}}, "关闭"), h("button", {class:"primaryish", dataset:{act:"reviewplan"}}, "规划这一周")));
   }
 
+  function dayStrip(day, v){
+    const td = todayStr(), days = [];
+    for(let i=0;i<=6;i++){ const d = addDays(td, i); if(d!==day) days.push(d); }
+    const name = d => d===td ? "今天" : d===addDays(td,1) ? "明天" : wk(d);
+    const pills = days.map(d=>h("div", {class:"pill"+(d===td?" istoday":""), dataset:{date:d}, title:"把任务拖到这里，改到"+dayLabel(d)}, h("b",{text:name(d)}), md(d)));
+    const strip = h("div", {class:"strip daydrop", "aria-label":"把任务拖到某一天"}, h("span", {class:"strip-l", text:"拖到："}), pills);
+    return {strip, pills};
+  }
   function viewDay(m, v){
     const td = todayStr(), day = v==="today" ? td : addDays(td,1);
     const tasks = state.tasks.filter(t=>onDay(t,day) || (v==="today" && t.date && lastDay(t)<td && !t.completed));
@@ -2398,11 +2408,18 @@ body.dragging{cursor:grabbing;user-select:none;-webkit-user-select:none}
     }
     if(open.length) m.append(capStrip(day, v, open, p));
     if(v==="today" && open.length && planShown(open)) m.append(planCard(open));
+    const ds2 = open.length ? dayStrip(day, v) : null;
+    if(ds2) m.append(ds2.strip);
     if(tlOn()) m.append(timeline(day, list));
     else {
       const ul = rowList(list, {day, sep:true});
       m.append(h("div", {class:"card"}, ul));
-      if(window.Sortable) sortables.push(new Sortable(ul, sortOpts({handle:".grip", draggable:".row:not(.done)", onEnd:()=>{ reorder(ul); save(); setTimeout(renderMain,0); }})));
+      if(window.Sortable){
+        sortables.push(new Sortable(ul, sortOpts({group:{name:"dayrows", pull:true, put:false}, handle:".grip", draggable:".row:not(.done)",
+          onEnd:e=>{ if(e.from===e.to){ reorder(ul); save(); setTimeout(renderMain,0); } }})));
+        if(ds2) ds2.pills.forEach(pl=>sortables.push(new Sortable(pl, sortOpts({group:{name:"dayrows", pull:false, put:true}, draggable:".row",
+          onAdd:e=>{ const id = e.item.dataset.id; e.item.remove(); moveToDay(id, pl.dataset.date, null, day); }}))));
+      }
     }
     if(v==="today"){
       const sc = staleCard(open); if(sc) m.append(sc);
@@ -2472,6 +2489,9 @@ body.dragging{cursor:grabbing;user-select:none;-webkit-user-select:none}
     const move = ev => {
       if(!moved){ if(Math.hypot(ev.clientX-sx, ev.clientY-sy)<5) return; moved = true; ghost = h("div", {class:"tl-ghost", text:t.title}); document.body.append(ghost); document.body.classList.add("dragging"); el.classList.add("lifting"); }
       ghost.style.transform = "translate("+(ev.clientX+14)+"px,"+(ev.clientY+10)+"px)";
+      const pl = (document.elementFromPoint(ev.clientX, ev.clientY) || {}).closest ? document.elementFromPoint(ev.clientX, ev.clientY).closest(".daydrop .pill") : null;
+      $$(".daydrop .pill.over").forEach(x=>{ if(x!==pl) x.classList.remove("over"); });
+      if(pl){ pl.classList.add("over"); drop.hidden = true; target = {pill:pl.dataset.date}; trayEl.classList.remove("over"); return; }
       const sr = scroll.getBoundingClientRect();
       if(inside(scroll, ev)){
         const mn = minsAt(ev.clientY); target = {min:mn};
@@ -2483,8 +2503,10 @@ body.dragging{cursor:grabbing;user-select:none;-webkit-user-select:none}
     const end = ev => {
       window.removeEventListener("pointermove", move); window.removeEventListener("pointerup", end); window.removeEventListener("pointercancel", end);
       if(ghost) ghost.remove(); document.body.classList.remove("dragging"); el.classList.remove("lifting"); drop.hidden = true; trayEl.classList.remove("over");
+      $$(".daydrop .pill.over").forEach(x=>x.classList.remove("over"));
       if(!moved){ openEditor(t.id); return; }
       if(!target) return;
+      if(target.pill){ moveToDay(t.id, target.pill, null, day); return; }
       const prevDate = t.date, prevDays = (t.days||[]).slice();
       if(target.min===null){ if(!timeOf(t)) return; setDays(t, daysOf(t).length ? daysOf(t) : [day], ""); save(); renderAll(); toast("已取消时间："+t.title, ()=>{ t.date = prevDate; t.days = prevDays; save(); renderAll(); }); return; }
       setDays(t, daysOf(t).length ? daysOf(t) : [day], fromMin(target.min)); save(); renderAll();
