@@ -541,7 +541,8 @@ kbd{font-family:var(--text);font-size:11px;border:1px solid var(--line);border-b
   .vh h2{font-size:26px}
   .calgrid.week{grid-template-columns:minmax(0,1fr)}
   .calgrid.week .cday{min-height:0;flex-direction:row;align-items:flex-start;gap:10px;padding:8px}
-  .calgrid.week .chead{border:0;width:46px;flex:none;align-items:center}
+  .calgrid.week .chead{border:0;width:56px;flex:none;align-items:center}
+  .restbtn{font-size:10px;padding:3px 4px;white-space:nowrap}
   .calgrid.week .ev{-webkit-line-clamp:3}
   .calgrid.month .cday{min-height:62px;padding:4px 2px;gap:3px}
   .calgrid.month .chead{justify-content:center}
@@ -1951,6 +1952,21 @@ body.dragging{cursor:grabbing;user-select:none;-webkit-user-select:none}
     save(); renderAll();
     toast(tag+"：已把"+(from && from>td ? "这天起的 " : " ")+plan.length+" 项任务整体顺延一天", ()=>{ snap.forEach(x=>{ x.t.date = x.date; x.t.days = x.days; x.t.doneDays = x.doneDays; x.t.rolledFrom = x.rolledFrom; x.t.rolls = x.rolls; }); save(); renderAll(); });
   }
+  /* 把某一天未完成的任务整体挪到下一天（只动这一天，不连带别的天） */
+  function pushDay(from){
+    const to = addDays(from,1), td = todayStr();
+    const list = state.tasks.filter(t=>!t.completed && !doneOn(t,from) && (onDay(t,from) || (from===td && t.date && lastDay(t)<td)));
+    const lbl = d => d===td ? "今天" : d===addDays(td,1) ? "明天" : dayLabel(d);
+    if(!list.length){ toast(lbl(from)+"没有需要挪的任务"); return; }
+    const snap = list.map(t=>({t, date:t.date, days:(t.days||[]).slice(), doneDays:(t.doneDays||[]).slice(), rolledFrom:t.rolledFrom, rolls:t.rolls}));
+    list.forEach(t=>{
+      const a = daysOf(t);
+      if(a.length>1) setDays(t, [...new Set(a.filter(x=>x!==from).concat([to]))].sort());
+      else setDays(t, [to]);
+    });
+    save(); renderAll();
+    toast("已把"+lbl(from)+"的 "+list.length+" 项任务挪到"+lbl(to), ()=>{ snap.forEach(x=>{ x.t.date = x.date; x.t.days = x.days; x.t.doneDays = x.doneDays; x.t.rolledFrom = x.rolledFrom; x.t.rolls = x.rolls; }); save(); renderAll(); });
+  }
   function moveToDay(id, day, container, fromDay){
     const t = getTask(id); if(!t) return;
     const prev = t.date, prevDays = (t.days||[]).slice(), a = daysOf(t);
@@ -2736,7 +2752,7 @@ body.dragging{cursor:grabbing;user-select:none;-webkit-user-select:none}
       boxes.push(box);
       grid.append(h("div", {class:"cday"+(day===td?" istoday":""), dataset:{date:day}},
         h("div", {class:"chead"}, h("span",{text:wk(day)}), h("div", {class:"crow"}, h("span",{class:"dnum", text:md(day)}), pomBadge(day)),
-          day>=td ? h("button", {class:"restbtn", title:(day===td ? "今天休息：" : dayLabel(day)+"休息：")+"这天起所有未完成任务整体顺延一天（日程不动），可撤销", dataset:{act:"restday", from:day}}, "休息") : null),
+          day>=td && tasks.some(t=>!doneOn(t,day)) ? h("button", {class:"restbtn", title:"把"+dayLabel(day)+"没完成的任务全部挪到"+dayLabel(addDays(day,1))+"（日程不动，可撤销）", dataset:{act:"pushday", from:day}}, day===td ? "挪到明天" : "挪到次日") : null),
         box));
     }
     m.append(grid);
@@ -3135,6 +3151,7 @@ body.dragging{cursor:grabbing;user-select:none;-webkit-user-select:none}
       else if(act==="dailytoggle"){ dailyOpen = !dailyOpen; renderMain(); }
       else if(act==="tlmode"){ lsSet("pomodoro-todo:tl", a.dataset.m==="tl" ? "1" : "0"); renderMain(); }
       else if(act==="restday"){ restDay(a.dataset.from || ""); }
+      else if(act==="pushday"){ pushDay(a.dataset.from); }
       else if(act==="planopen"){ planOpen = !planShown(state.tasks.filter(x=>!x.completed && x.date && lastDay(x)<=todayStr())); renderMain(); }
       else if(act==="planok"){ planOpen = false; lsSet("pomodoro-todo:plan", todayStr()); renderMain(); toast("好，开始吧"); }
       else if(act==="planest" && t){ t.est = clamp((t.est||0)+(+a.dataset.d), 0, 40); save(); renderAll(); }
