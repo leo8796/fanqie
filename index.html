@@ -1926,6 +1926,26 @@ body.dragging{cursor:grabbing;user-select:none;-webkit-user-select:none}
     const orders = tasks.map(t=>t.order).sort((a,b)=>a-b);
     tasks.forEach((t,i)=>t.order = orders[i]);
   }
+  /* 今天休息：未完成的任务整体顺延一天（日程、考试、DDL 不动）；逾期的并到明天 */
+  function restPlan(){
+    const td = todayStr(), tm = addDays(td,1), out = [];
+    state.tasks.forEach(t=>{
+      if(t.completed || !t.date) return;
+      const days = daysOf(t), dn = t.doneDays || [];
+      if(lastDay(t) < td){ out.push([t, [tm]]); return; }
+      const nd = days.map(d => (d>=td && !dn.includes(d)) ? addDays(d,1) : d);
+      if(nd.join()!==days.join()) out.push([t, nd]);
+    });
+    return out;
+  }
+  function restDay(){
+    const plan = restPlan();
+    if(!plan.length){ toast("没有需要顺延的任务，今天好好休息"); return; }
+    const snap = plan.map(([t])=>({t, date:t.date, days:(t.days||[]).slice(), doneDays:(t.doneDays||[]).slice(), rolledFrom:t.rolledFrom, rolls:t.rolls}));
+    plan.forEach(([t, nd])=>setDays(t, nd));
+    save(); renderAll();
+    toast("今天休息：已把 "+plan.length+" 项任务整体顺延一天", ()=>{ snap.forEach(x=>{ x.t.date = x.date; x.t.days = x.days; x.t.doneDays = x.doneDays; x.t.rolledFrom = x.rolledFrom; x.t.rolls = x.rolls; }); save(); renderAll(); });
+  }
   function moveToDay(id, day, container, fromDay){
     const t = getTask(id); if(!t) return;
     const prev = t.date, prevDays = (t.days||[]).slice(), a = daysOf(t);
@@ -2297,6 +2317,7 @@ body.dragging{cursor:grabbing;user-select:none;-webkit-user-select:none}
       h("div", {class:"capbar", role:"img", "aria-label":"预估占容量 "+pct+"%"}, h("i", {style:"width:"+pct+"%"})),
       h("div", {class:"capr"},
         v==="today" ? h("button", {class:"mini", dataset:{act:"planopen"}, "aria-pressed":String(planShown(open))}, planShown(open) ? "收起规划" : "规划今天") : null,
+        v==="today" ? h("button", {class:"mini", title:"所有未完成任务整体顺延一天（日程不动），可撤销", dataset:{act:"restday"}}, "今天休息") : null,
         h("div", {class:"seg2", role:"group", "aria-label":"显示方式"},
           h("button", {dataset:{act:"tlmode", m:"list"}, "aria-pressed":String(!tlOn())}, "列表"),
           h("button", {dataset:{act:"tlmode", m:"tl"}, "aria-pressed":String(tlOn())}, "时间线"))));
@@ -3107,6 +3128,7 @@ body.dragging{cursor:grabbing;user-select:none;-webkit-user-select:none}
       }
       else if(act==="dailytoggle"){ dailyOpen = !dailyOpen; renderMain(); }
       else if(act==="tlmode"){ lsSet("pomodoro-todo:tl", a.dataset.m==="tl" ? "1" : "0"); renderMain(); }
+      else if(act==="restday"){ restDay(); }
       else if(act==="planopen"){ planOpen = !planShown(state.tasks.filter(x=>!x.completed && x.date && lastDay(x)<=todayStr())); renderMain(); }
       else if(act==="planok"){ planOpen = false; lsSet("pomodoro-todo:plan", todayStr()); renderMain(); toast("好，开始吧"); }
       else if(act==="planest" && t){ t.est = clamp((t.est||0)+(+a.dataset.d), 0, 40); save(); renderAll(); }
@@ -3781,7 +3803,7 @@ body.dragging{cursor:grabbing;user-select:none;-webkit-user-select:none}
     const cmds = [
       {k:"new", g:"命令", t:"新建任务", hint:"N"},
       {k:"timer", g:"命令", t:T.running ? "暂停计时" : "开始计时", hint:"空格"},
-      {k:"plan", g:"命令", t:"规划今天"}, {k:"wrap", g:"命令", t:"今天收尾"},
+      {k:"plan", g:"命令", t:"规划今天"}, {k:"wrap", g:"命令", t:"今天收尾"}, {k:"rest", g:"命令", t:"今天休息：全部任务顺延一天"},
       {k:"tl", g:"命令", t:tlOn() ? "今天页改成列表显示" : "今天页改成时间线显示"},
       {k:"ics", g:"命令", t:"导入课表（.ics 文件）"}, {k:"export", g:"命令", t:"导出备份"},
       ...VIEWS.map((v,i)=>({k:"go", id:v, g:"跳转", t:"跳到「"+VIEW_NAME[v]+"」", hint:String(i+1)}))
@@ -3817,6 +3839,7 @@ body.dragging{cursor:grabbing;user-select:none;-webkit-user-select:none}
     else if(it.k==="timer") toggle();
     else if(it.k==="plan"){ setView("today"); planOpen = true; renderMain(); }
     else if(it.k==="wrap"){ setView("today"); wrapOpen = true; renderMain(); }
+    else if(it.k==="rest") restDay();
     else if(it.k==="tl"){ lsSet("pomodoro-todo:tl", tlOn() ? "0" : "1"); setView("today"); renderMain(); }
     else if(it.k==="ics"){ setView("projects"); $("#icsFile").value = ""; $("#icsFile").click(); }
     else if(it.k==="export") openIO("export");
