@@ -194,6 +194,10 @@ li.sep{list-style:none;font-size:12px;color:var(--muted);padding:10px 8px 2px 44
 .calgrid.week .cday{min-height:360px}
 .calgrid.week .chead{flex-direction:column;align-items:flex-start;gap:0;padding-bottom:6px;border-bottom:1px solid var(--line);margin-bottom:2px}
 .calgrid.week .chead .cnt{display:none}
+.restbtn{margin-top:4px;font:inherit;font-size:11px;line-height:1;padding:3px 7px;border:1px dashed var(--line);border-radius:8px;background:transparent;color:var(--muted);cursor:pointer;opacity:.55;transition:opacity .12s,border-color .12s,color .12s}
+.cday:hover .restbtn,.restbtn:focus-visible{opacity:1}
+.restbtn:hover{opacity:1;color:var(--ink);border-color:var(--ink);border-style:solid}
+@media (hover:none){.restbtn{opacity:1}}
 .calgrid.month .cday{min-height:104px}
 .calgrid.month .ev{-webkit-line-clamp:1;display:block;white-space:nowrap;text-overflow:ellipsis}
 .more{border:0;background:none;font-size:11px;color:var(--muted);text-align:left;padding:0 6px}
@@ -1927,24 +1931,25 @@ body.dragging{cursor:grabbing;user-select:none;-webkit-user-select:none}
     tasks.forEach((t,i)=>t.order = orders[i]);
   }
   /* 今天休息：未完成的任务整体顺延一天（日程、考试、DDL 不动）；逾期的并到明天 */
-  function restPlan(){
+  function restPlan(from){
     const td = todayStr(), tm = addDays(td,1), out = [];
+    from = from && from>td ? from : td;
     state.tasks.forEach(t=>{
       if(t.completed || !t.date) return;
       const days = daysOf(t), dn = t.doneDays || [];
-      if(lastDay(t) < td){ out.push([t, [tm]]); return; }
-      const nd = days.map(d => (d>=td && !dn.includes(d)) ? addDays(d,1) : d);
+      if(from===td && lastDay(t) < td){ out.push([t, [tm]]); return; }
+      const nd = days.map(d => (d>=from && !dn.includes(d)) ? addDays(d,1) : d);
       if(nd.join()!==days.join()) out.push([t, nd]);
     });
     return out;
   }
-  function restDay(){
-    const plan = restPlan();
-    if(!plan.length){ toast("没有需要顺延的任务，今天好好休息"); return; }
+  function restDay(from){
+    const td = todayStr(), plan = restPlan(from), tag = from && from>td ? dayLabel(from)+"休息" : "今天休息";
+    if(!plan.length){ toast("没有需要顺延的任务，"+(from && from>td ? "这天可以空着" : "今天好好休息")); return; }
     const snap = plan.map(([t])=>({t, date:t.date, days:(t.days||[]).slice(), doneDays:(t.doneDays||[]).slice(), rolledFrom:t.rolledFrom, rolls:t.rolls}));
     plan.forEach(([t, nd])=>setDays(t, nd));
     save(); renderAll();
-    toast("今天休息：已把 "+plan.length+" 项任务整体顺延一天", ()=>{ snap.forEach(x=>{ x.t.date = x.date; x.t.days = x.days; x.t.doneDays = x.doneDays; x.t.rolledFrom = x.rolledFrom; x.t.rolls = x.rolls; }); save(); renderAll(); });
+    toast(tag+"：已把"+(from && from>td ? "这天起的 " : " ")+plan.length+" 项任务整体顺延一天", ()=>{ snap.forEach(x=>{ x.t.date = x.date; x.t.days = x.days; x.t.doneDays = x.doneDays; x.t.rolledFrom = x.rolledFrom; x.t.rolls = x.rolls; }); save(); renderAll(); });
   }
   function moveToDay(id, day, container, fromDay){
     const t = getTask(id); if(!t) return;
@@ -2730,7 +2735,8 @@ body.dragging{cursor:grabbing;user-select:none;-webkit-user-select:none}
       const box = h("div", {class:"evs", dataset:{date:day}}, evsOn(day).map(evPill), tasks.map(t=>ev(t, day)));
       boxes.push(box);
       grid.append(h("div", {class:"cday"+(day===td?" istoday":""), dataset:{date:day}},
-        h("div", {class:"chead"}, h("span",{text:wk(day)}), h("div", {class:"crow"}, h("span",{class:"dnum", text:md(day)}), pomBadge(day))),
+        h("div", {class:"chead"}, h("span",{text:wk(day)}), h("div", {class:"crow"}, h("span",{class:"dnum", text:md(day)}), pomBadge(day)),
+          day>=td ? h("button", {class:"restbtn", title:(day===td ? "今天休息：" : dayLabel(day)+"休息：")+"这天起所有未完成任务整体顺延一天（日程不动），可撤销", dataset:{act:"restday", from:day}}, "休息") : null),
         box));
     }
     m.append(grid);
@@ -3128,7 +3134,7 @@ body.dragging{cursor:grabbing;user-select:none;-webkit-user-select:none}
       }
       else if(act==="dailytoggle"){ dailyOpen = !dailyOpen; renderMain(); }
       else if(act==="tlmode"){ lsSet("pomodoro-todo:tl", a.dataset.m==="tl" ? "1" : "0"); renderMain(); }
-      else if(act==="restday"){ restDay(); }
+      else if(act==="restday"){ restDay(a.dataset.from || ""); }
       else if(act==="planopen"){ planOpen = !planShown(state.tasks.filter(x=>!x.completed && x.date && lastDay(x)<=todayStr())); renderMain(); }
       else if(act==="planok"){ planOpen = false; lsSet("pomodoro-todo:plan", todayStr()); renderMain(); toast("好，开始吧"); }
       else if(act==="planest" && t){ t.est = clamp((t.est||0)+(+a.dataset.d), 0, 40); save(); renderAll(); }
